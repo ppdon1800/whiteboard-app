@@ -14,14 +14,13 @@ function Canvas() {
   const drawRef = useRef(null);
   const redoStack = useRef([]);
   const strokeWidth = useRef(2);
-  const Eraser = useRef(false);
-  const SoftEraser = useRef(false);
-  const FONT = useRef("30px sans-serif")
+  const FONT = useRef("30px sans-serif");
+  const inputRef = useRef(null);
   const [penOptions, setPenOptions] = useState(false);
   const [isInputBox, setInputBox] = useState(false);
   const [awaitText, setAwaitText] = useState(false);
   const [textpos, setTextPos] = useState([100, 100]);
-  const [isDrawing, setIsDrawing] = useState('');
+  const [isDrawing, setIsDrawing] = useState("");
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -54,8 +53,6 @@ function Canvas() {
 
     // redraw all stored paths and the active path
     function redraw() {
-      // canvas.width/height are in device pixels; our drawing coordinates
-      // use CSS pixels because we scaled the context by devicePixelRatio.
       const dpr = window.devicePixelRatio || 1;
       ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
       ctx.lineJoin = "round";
@@ -73,12 +70,17 @@ function Canvas() {
           ctx.strokeStyle = p.color;
           ctx.lineWidth = p.width;
           ctx.stroke();
-        } else {
-          if (p.type === "text") {
-            ctx.font = p.font;
-            ctx.fillStyle = p.color;
-            ctx.fillText(p.text, p.position[0], p.position[1]);
-          }
+        } else if (p.type === "text") {
+          ctx.font = p.font;
+          ctx.fillStyle = p.color;
+          ctx.fillText(p.text, p.position[0], p.position[1]);
+        } else if (p.type === "line") {
+          ctx.beginPath();
+          ctx.moveTo(p.start[0], p.start[1]);
+          ctx.lineTo(p.end[0], p.end[1]);
+          ctx.strokeStyle = p.color;
+          ctx.lineWidth = p.width;
+          ctx.stroke();
         }
       }
     }
@@ -102,6 +104,8 @@ function Canvas() {
       const eraserRadius = 10;
       const mousePos = getPos(e);
       for (const path of paths) {
+        // skip non-drawable entries (text, lines without point arrays)
+        if (!path.path || !Array.isArray(path.path)) continue;
         for (const point of path.path) {
           const d = distance(mousePos, point);
           if (d < eraserRadius) {
@@ -125,6 +129,8 @@ function Canvas() {
       // Iterate over all existing paths
       for (let i = 0; i < paths.length; i++) {
         const path = paths[i];
+        // skip non-drawable entries
+        if (!path.path || !Array.isArray(path.path)) continue;
         const oldPoints = path.path; // array of [x, y] points
 
         let currentSegment = [];
@@ -132,25 +138,18 @@ function Canvas() {
         for (let j = 0; j < oldPoints.length; j++) {
           const point = oldPoints[j]; // [x, y]
 
-          // Check if the point is outside the eraser's radius (i.e., keep it)
-          // The distance function must correctly handle two [x, y] arrays!
           if (distance(mousePos, point) > eraserRadius) {
             // Point is kept, add it to the current segment
             currentSegment.push(point);
           } else {
             // Point is being erased (a gap is created)
-
-            // If the current segment has points, it is a complete path segment.
             if (currentSegment.length > 0) {
-              // Save the completed continuous segment as a new path
               newPaths.push({
-                color: path.color, // Preserve path style/metadata
+                color: path.color,
                 width: path.width,
                 path: currentSegment,
               });
             }
-
-            // Start a new empty segment for the points that follow the gap
             currentSegment = [];
           }
         }
@@ -165,57 +164,90 @@ function Canvas() {
         }
       }
 
-      // Replace the global paths array with the new, split paths
-      // Use length = 0 to clear the array reference without changing PATHS.current
       paths.length = 0;
       paths.push(...newPaths);
-
       redraw();
     }
-    // event handlers (named so they can be removed later)
-    // get pointer position in CSS pixels relative to the canvas
+
     const getPos = (e) => {
       const rect = canvas.getBoundingClientRect();
       return [e.clientX - rect.left, e.clientY - rect.top];
     };
 
     const onMouseDown = (e) => {
+      if (awaitText) {
+        // Stop propagation to prevent immediate closing by outside click handlers
+        e.stopPropagation();
+        setTextPos(getPos(e));
+        setInputBox(true);
+        setAwaitText(false);
+        return;
+      }
+
       mouseDown = true;
       currentPath = [getPos(e)];
       redraw();
-      setTextPos(getPos(e));
-      if (awaitText){
-        console.log('first')
-        setInputBox(!isInputBox);
-      }
     };
 
     const onMouseMove = (e) => {
       if (!mouseDown) return;
-      if (penOptions) {
+      if (isDrawing === "pen") {
         currentPath.push(getPos(e));
         drawCurrentPath();
       }
 
-      if (Eraser.current) {
+      if (isDrawing === 'eraser') {
         hardEraser(e);
       }
-      if (SoftEraser.current) {
+      if (isDrawing === 'softEraser') {
         softEraser(e);
       }
-      
+      if (isDrawing === "line") {
+        const mousePos = getPos(e);
+        currentPath = [
+          [currentPath[0][0], currentPath[0][1]],
+          [mousePos[0], mousePos[1]],
+        ];
+
+        redraw();
+        drawCurrentPath();
+      }
+      if(isDrawing === "rect") {
+        const mousePos = getPos(e);
+        ctx.beginPath();
+        const rectWidth = mousePos[0] - currentPath[0][0];
+        const rectHeight = mousePos[1] - currentPath[0][1];
+        ctx.rect(currentPath[0][0], currentPath[0][1], rectWidth, rectHeight);
+        ctx.strokeStyle = currentColor.current;
+        ctx.lineWidth = strokeWidth.current;
+        ctx.stroke();
+      }
     };
 
     const onMouseUp = () => {
       if (!mouseDown) return;
       mouseDown = false;
-      const p = {
-        color: currentColor.current,
-        width: strokeWidth.current,
-        path: currentPath,
-      };
-      if (currentPath && currentPath.length > 0 && penOptions) paths.push(p);
-      currentPath = null;
+      if (isDrawing === "pen") {
+        const p = {
+          color: currentColor.current,
+          width: strokeWidth.current,
+          path: currentPath,
+        };
+        if (currentPath && currentPath.length > 0 && penOptions) paths.push(p);
+        currentPath = null;
+      }
+
+      if (isDrawing === "line") {
+        const linePath = {
+          type: "line",
+          color: currentColor.current,
+          width: strokeWidth.current,
+          start: [currentPath[0][0], currentPath[0][1]],
+          end: [currentPath[1][0], currentPath[1][1]],
+          path:currentPath,
+        };
+        paths.push(linePath);
+      }
       redraw();
     };
 
@@ -227,7 +259,6 @@ function Canvas() {
 
     // initialize size
     setSize();
-
     // cleanup uses same function references
     return () => {
       canvas.removeEventListener("mousedown", onMouseDown);
@@ -236,7 +267,22 @@ function Canvas() {
       window.removeEventListener("resize", setSize);
       drawRef.current = null;
     };
-  }, [penOptions,isInputBox,awaitText]);
+  }, [penOptions, isInputBox, awaitText, isDrawing]);
+
+  useEffect(() => {
+    const handleOutsideClick = (e) => {
+      if (isInputBox) {
+        const inputEl = inputRef.current;
+        if (!inputEl || !inputEl.contains(e.target)) {
+          setInputBox(false);
+          setAwaitText(false);
+        }
+      }
+    };
+
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, [isInputBox]);
 
   const pickColor = (e) => {
     console.log(e.target.value);
@@ -246,20 +292,23 @@ function Canvas() {
     strokeWidth.current = e.target.value;
   };
   const setText = (e) => {
-    // if (e.key !== "Enter") return;
+    if (!e.target.value.trim()) return;
+
     PATHS.current.push({
-        type: 'text',
+      type: "text",
       text: e.target.value,
       position: [textpos[0], textpos[1]],
       color: currentColor.current,
       font: FONT.current,
     });
+
     console.log(PATHS.current);
-    e.target.value = "";
-    drawRef.current();
+    if (drawRef.current) drawRef.current();
   };
+
   return (
-    <div>
+    // CHANGED: Added position relative here so the absolute input aligns with canvas
+    <div style={{ position: "relative" }}>
       <canvas
         ref={canvasRef}
         width={window.innerWidth}
@@ -269,65 +318,94 @@ function Canvas() {
       {isInputBox && (
         <input
           style={{
+            // CHANGED: Fixed -> Absolute to match canvas coordinates
             position: "absolute",
-            top: textpos[1] + "px",
-            left: textpos[0] + "px",
-            zIndex: 10,
+            top: `${textpos[1]}px`,
+            left: `${textpos[0]}px`,
+            // CHANGED: Increased zIndex significantly to ensure visibility
+            zIndex: 9999,
+            fontSize: "30px",
+            fontFamily: "sans-serif",
+            border: "2px solid #161414ff",
+            padding: "5px",
+            background: "white",
+            color: currentColor.current, // Optional: match current color
           }}
+          ref={inputRef}
           autoFocus
-          onKeyDown={(e)=>{(e.key === "Enter") && setText(e)}}
-          onBlur={(e)=>{
-            e.target.value && setText(e);
-            //setInputBox(!isInputBox);
-            //setAwaitText(!awaitText);
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              setText(e);
+              setInputBox(false);
+              setAwaitText(false);
+            }
+            if (e.key === "Escape") {
+              setInputBox(false);
+              setAwaitText(false);
+            }
           }}
-          type="text"
+          defaultValue=""
         />
       )}
-      <button onClick={() => {setAwaitText(!awaitText);
-        setPenOptions(false);
-        Eraser.current= false;
-        SoftEraser.current = false;
-      }}>Text</button>
-      <button
-        onClick={() => {
-          PATHS.current.length = 0;
-          if (drawRef.current) drawRef.current();
-        }}
-      >
-        clear
-      </button>
-      <button onClick={()=>setIsDrawing('line')}>Line</button>
+
+      <div style={{ position: "fixed", top: 0, left: 0, zIndex: 1000 }}>
+        {/* Wrapped buttons in a fixed container so they don't flow under canvas */}
+        <button
+          onClick={() => {
+            setAwaitText(true);
+            setPenOptions(false);
+            setIsDrawing("");
+          }}
+        >
+          Text
+        </button>
+        <button
+          onClick={() => {
+            PATHS.current.length = 0;
+            if (drawRef.current) drawRef.current();
+          }}
+        >
+          clear
+        </button>
+        <button
+          onClick={() => {
+            setIsDrawing("line");
+            setPenOptions(false);
+            setInputBox(false);
+          }}
+        >
+          Line
+        </button>
+        <button
+          onClick={() => {
+            setIsDrawing("eraser");
+            setPenOptions(false);
+            setInputBox(false);
+          }}
+        >
+          Eraser
+        </button>
+        <button
+          onClick={() => {
+            setIsDrawing('softEraser');
+            setPenOptions(false);
+            setInputBox(false);
+          }}
+        >
+          SoftEraser
+        </button>
+        <button onClick={()=>setIsDrawing('rect')}>Rect</button>
+      </div>
+
       <Undo PATHS={PATHS} redoStack={redoStack} drawRef={drawRef} />
       <Redo PATHS={PATHS} redoStack={redoStack} drawRef={drawRef} />
       <PenTool
         setPenOptions={setPenOptions}
         callBack={pickColor}
         callBack2={setStrokeWidth}
-        eraser={Eraser}
-        softEraser={SoftEraser}
         setInputBox={setInputBox}
+        setIsDrawing={setIsDrawing}
       />
-      <button
-        onClick={() => {
-          Eraser.current = true;
-          setPenOptions(false);
-          SoftEraser.current = false;
-          setInputBox(false);
-        }}
-      >
-        Eraser
-      </button>
-      <button
-        onClick={() => {
-          SoftEraser.current = true;
-          setPenOptions(false);
-          Eraser.current = false;
-          setInputBox(false);
-        }}
-      >
-        SoftEraser
-      </button>
 
       <LeftSideBar penOptions={penOptions} />
     </div>
