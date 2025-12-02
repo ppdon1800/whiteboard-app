@@ -5,7 +5,8 @@ import Redo from "./ui/Redo";
 import PenTool from "./ui/PenTool";
 import LeftSideBar from "./ui/LeftSideBar";
 import ColorPicker from "./ui/ColorPicker";
-import { distance } from "../../utils/utils";
+import { distance,  } from "../../utils/utils";
+import { reDraw, DrawCurrentPath, drawRect, drawCircle, HardEraser, SoftEraser , drawStepArrow} from "../../utils/draw";
 
 function Canvas() {
   const canvasRef = useRef(null);
@@ -29,6 +30,7 @@ function Canvas() {
     let mouseDown = false;
     const paths = PATHS.current; // array of paths; each path is array of [x,y]
     let currentPath = null;
+    let obj = null;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
@@ -53,120 +55,18 @@ function Canvas() {
 
     // redraw all stored paths and the active path
     function redraw() {
-      const dpr = window.devicePixelRatio || 1;
-      ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
-      ctx.lineJoin = "round";
-      ctx.lineCap = "round";
-      ctx.strokeStyle = currentColor.current;
-      ctx.lineWidth = 2;
-
-      for (const p of paths) {
-        if (p.type != "text" && p.path) {
-          const l = p.path.length;
-          if (!p || l === 0) continue;
-          ctx.beginPath();
-          ctx.moveTo(p.path[0][0], p.path[0][1]);
-          for (let i = 1; i < l; i++) ctx.lineTo(p.path[i][0], p.path[i][1]);
-          ctx.strokeStyle = p.color;
-          ctx.lineWidth = p.width;
-          ctx.stroke();
-        } else if (p.type === "text") {
-          ctx.font = p.font;
-          ctx.fillStyle = p.color;
-          ctx.fillText(p.text, p.position[0], p.position[1]);
-        } else if (p.type === "line") {
-          ctx.beginPath();
-          ctx.moveTo(p.start[0], p.start[1]);
-          ctx.lineTo(p.end[0], p.end[1]);
-          ctx.strokeStyle = p.color;
-          ctx.lineWidth = p.width;
-          ctx.stroke();
-        }
-      }
+    reDraw(ctx, canvas, PATHS.current, currentColor, drawStepArrow);
     }
     // expose redraw so outside handlers (buttons) can clear/redraw
     drawRef.current = redraw;
     function drawCurrentPath() {
-      if (currentPath && currentPath.length > 0) {
-        ctx.beginPath();
-        ctx.strokeStyle = currentColor.current;
-        ctx.lineWidth = strokeWidth.current;
-        ctx.lineJoin = "round";
-        ctx.lineCap = "round";
-        ctx.moveTo(currentPath[0][0], currentPath[0][1]);
-        for (let i = 1; i < currentPath.length; i++)
-          ctx.lineTo(currentPath[i][0], currentPath[i][1]);
-
-        ctx.stroke();
-      }
+      DrawCurrentPath(ctx, currentPath, currentColor, strokeWidth);
     }
     function hardEraser(e) {
-      const eraserRadius = 10;
-      const mousePos = getPos(e);
-      for (const path of paths) {
-        // skip non-drawable entries (text, lines without point arrays)
-        if (!path.path || !Array.isArray(path.path)) continue;
-        for (const point of path.path) {
-          const d = distance(mousePos, point);
-          if (d < eraserRadius) {
-            const index = paths.indexOf(path);
-            if (index > -1) {
-              const p = paths.splice(index, 1);
-              redoStack.current.push(p[0]);
-              redraw();
-              return;
-            }
-          }
-        }
-      }
-      console.log("Erassing");
+      HardEraser(e, PATHS.current, getPos, redraw, distance, redoStack);
     }
     function softEraser(e) {
-      const eraserRadius = 10;
-      const mousePos = getPos(e); // This returns [x, y]
-      const newPaths = [];
-
-      // Iterate over all existing paths
-      for (let i = 0; i < paths.length; i++) {
-        const path = paths[i];
-        // skip non-drawable entries
-        if (!path.path || !Array.isArray(path.path)) continue;
-        const oldPoints = path.path; // array of [x, y] points
-
-        let currentSegment = [];
-
-        for (let j = 0; j < oldPoints.length; j++) {
-          const point = oldPoints[j]; // [x, y]
-
-          if (distance(mousePos, point) > eraserRadius) {
-            // Point is kept, add it to the current segment
-            currentSegment.push(point);
-          } else {
-            // Point is being erased (a gap is created)
-            if (currentSegment.length > 0) {
-              newPaths.push({
-                color: path.color,
-                width: path.width,
-                path: currentSegment,
-              });
-            }
-            currentSegment = [];
-          }
-        }
-
-        // After the inner loop, check if the last segment has points
-        if (currentSegment.length > 0) {
-          newPaths.push({
-            color: path.color,
-            width: path.width,
-            path: currentSegment,
-          });
-        }
-      }
-
-      paths.length = 0;
-      paths.push(...newPaths);
-      redraw();
+      SoftEraser(e, PATHS.current, getPos, redraw);
     }
 
     const getPos = (e) => {
@@ -183,7 +83,6 @@ function Canvas() {
         setAwaitText(false);
         return;
       }
-
       mouseDown = true;
       currentPath = [getPos(e)];
       redraw();
@@ -196,10 +95,10 @@ function Canvas() {
         drawCurrentPath();
       }
 
-      if (isDrawing === 'eraser') {
+      if (isDrawing === "eraser") {
         hardEraser(e);
       }
-      if (isDrawing === 'softEraser') {
+      if (isDrawing === "softEraser") {
         softEraser(e);
       }
       if (isDrawing === "line") {
@@ -212,15 +111,41 @@ function Canvas() {
         redraw();
         drawCurrentPath();
       }
-      if(isDrawing === "rect") {
+      if (isDrawing === "rect") {
+        redraw();
+        obj = drawRect(
+          e,
+          ctx,
+          currentPath,
+          currentColor,
+          getPos,
+          strokeWidth
+        );
+      }
+      if (isDrawing === "circle") {
+        redraw();
+        obj = drawCircle(
+          e,
+          ctx,
+          currentPath,
+          currentColor,
+          getPos,
+          strokeWidth
+        );
+      }
+      if (isDrawing === "arrow") {
+        redraw();
         const mousePos = getPos(e);
-        ctx.beginPath();
-        const rectWidth = mousePos[0] - currentPath[0][0];
-        const rectHeight = mousePos[1] - currentPath[0][1];
-        ctx.rect(currentPath[0][0], currentPath[0][1], rectWidth, rectHeight);
-        ctx.strokeStyle = currentColor.current;
-        ctx.lineWidth = strokeWidth.current;
-        ctx.stroke();
+        // drawArrow(ctx, currentPath[0], mousePos);
+        drawStepArrow(ctx, currentPath[0], mousePos);
+        const arrowPath = {
+          type: "arrow",
+          color: currentColor.current,
+          width: strokeWidth.current,
+          start: currentPath[0],
+          end: mousePos,
+        };
+        obj = arrowPath;
       }
     };
 
@@ -244,9 +169,21 @@ function Canvas() {
           width: strokeWidth.current,
           start: [currentPath[0][0], currentPath[0][1]],
           end: [currentPath[1][0], currentPath[1][1]],
-          path:currentPath,
+          path: currentPath,
         };
         paths.push(linePath);
+      }
+      if (isDrawing === "rect") {
+        paths.push(obj);
+        currentPath = null;
+      }
+      if (isDrawing === "circle") {
+        paths.push(obj);
+        currentPath = null;
+      }
+      if (isDrawing === "arrow") {
+        paths.push(obj);
+        currentPath = null;
       }
       redraw();
     };
@@ -329,7 +266,7 @@ function Canvas() {
             border: "2px solid #161414ff",
             padding: "5px",
             background: "white",
-            color: currentColor.current, // Optional: match current color
+            color: "#ffffff", // Optional: match current color
           }}
           ref={inputRef}
           autoFocus
@@ -387,14 +324,16 @@ function Canvas() {
         </button>
         <button
           onClick={() => {
-            setIsDrawing('softEraser');
+            setIsDrawing("softEraser");
             setPenOptions(false);
             setInputBox(false);
           }}
         >
           SoftEraser
         </button>
-        <button onClick={()=>setIsDrawing('rect')}>Rect</button>
+        <button onClick={() => setIsDrawing("rect")}>Rect</button>
+        <button onClick={() => setIsDrawing("circle")}>Circle</button>
+        <button onClick={() => setIsDrawing("arrow")}>Arrow</button>
       </div>
 
       <Undo PATHS={PATHS} redoStack={redoStack} drawRef={drawRef} />
