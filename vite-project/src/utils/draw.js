@@ -1,7 +1,11 @@
 import { distance } from "./utils.js";
-function reDraw(ctx, canvas, paths, currentColor, drawStepArrow) {
+function reDraw(ctx, canvas, paths, currentColor, drawStepArrow, panOffset) {
   const dpr = window.devicePixelRatio || 1;
   ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+
+  ctx.save();
+  ctx.translate(panOffset[0], panOffset[1]);
+
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
   ctx.strokeStyle = currentColor.current;
@@ -49,6 +53,7 @@ function reDraw(ctx, canvas, paths, currentColor, drawStepArrow) {
       drawStepArrow(ctx, p.start, p.end, p.color, 20);
     }
   }
+  ctx.restore();
 }
 
 function DrawCurrentPath(ctx, currentPath, currentColor, strokeWidth) {

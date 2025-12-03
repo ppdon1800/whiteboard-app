@@ -5,14 +5,23 @@ import Redo from "./ui/Redo";
 import PenTool from "./ui/PenTool";
 import LeftSideBar from "./ui/LeftSideBar";
 import ColorPicker from "./ui/ColorPicker";
-import { distance,  } from "../../utils/utils";
-import { reDraw, DrawCurrentPath, drawRect, drawCircle, HardEraser, SoftEraser , drawStepArrow} from "../../utils/draw";
+import { distance } from "../../utils/utils";
+import {
+  reDraw,
+  DrawCurrentPath,
+  drawRect,
+  drawCircle,
+  HardEraser,
+  SoftEraser,
+  drawStepArrow,
+} from "../../utils/draw";
 
 function Canvas() {
   const canvasRef = useRef(null);
   const currentColor = useRef("#000000");
   const PATHS = useRef([]);
   const drawRef = useRef(null);
+  const panOffset = useRef([0, 0]);
   const redoStack = useRef([]);
   const strokeWidth = useRef(2);
   const FONT = useRef("30px sans-serif");
@@ -55,12 +64,29 @@ function Canvas() {
 
     // redraw all stored paths and the active path
     function redraw() {
-    reDraw(ctx, canvas, PATHS.current, currentColor, drawStepArrow);
+      reDraw(
+        ctx,
+        canvas,
+        PATHS.current,
+        currentColor,
+        drawStepArrow,
+        panOffset.current
+      );
     }
     // expose redraw so outside handlers (buttons) can clear/redraw
     drawRef.current = redraw;
     function drawCurrentPath() {
       DrawCurrentPath(ctx, currentPath, currentColor, strokeWidth);
+    }
+    // helper to draw temporary previews using the same pan translation
+    function withPanDraw(fn) {
+      ctx.save();
+      ctx.translate(panOffset.current[0], panOffset.current[1]);
+      try {
+        fn();
+      } finally {
+        ctx.restore();
+      }
     }
     function hardEraser(e) {
       HardEraser(e, PATHS.current, getPos, redraw, distance, redoStack);
@@ -71,7 +97,16 @@ function Canvas() {
 
     const getPos = (e) => {
       const rect = canvas.getBoundingClientRect();
-      return [e.clientX - rect.left, e.clientY - rect.top];
+      let x = e.clientX - rect.left;
+      let y = e.clientY - rect.top;
+
+      // Subtract pan offset for new drawing coordinates
+      if (isDrawing !== "pantool") {
+        x -= panOffset.current[0];
+        y -= panOffset.current[1];
+      }
+
+      return [x, y];
     };
 
     const onMouseDown = (e) => {
@@ -92,7 +127,7 @@ function Canvas() {
       if (!mouseDown) return;
       if (isDrawing === "pen") {
         currentPath.push(getPos(e));
-        drawCurrentPath();
+        withPanDraw(() => drawCurrentPath());
       }
 
       if (isDrawing === "eraser") {
@@ -109,35 +144,32 @@ function Canvas() {
         ];
 
         redraw();
-        drawCurrentPath();
+        withPanDraw(() => drawCurrentPath());
       }
       if (isDrawing === "rect") {
         redraw();
-        obj = drawRect(
-          e,
-          ctx,
-          currentPath,
-          currentColor,
-          getPos,
-          strokeWidth
-        );
+        withPanDraw(() => {
+          obj = drawRect(e, ctx, currentPath, currentColor, getPos, strokeWidth);
+        });
       }
       if (isDrawing === "circle") {
         redraw();
-        obj = drawCircle(
-          e,
-          ctx,
-          currentPath,
-          currentColor,
-          getPos,
-          strokeWidth
-        );
+        withPanDraw(() => {
+          obj = drawCircle(
+            e,
+            ctx,
+            currentPath,
+            currentColor,
+            getPos,
+            strokeWidth
+          );
+        });
       }
       if (isDrawing === "arrow") {
         redraw();
         const mousePos = getPos(e);
         // drawArrow(ctx, currentPath[0], mousePos);
-        drawStepArrow(ctx, currentPath[0], mousePos);
+        withPanDraw(() => drawStepArrow(ctx, currentPath[0], mousePos));
         const arrowPath = {
           type: "arrow",
           color: currentColor.current,
@@ -146,6 +178,16 @@ function Canvas() {
           end: mousePos,
         };
         obj = arrowPath;
+      }
+      if (isDrawing === "pantool") {
+        const mousePos = getPos(e);
+        const dx = mousePos[0] - currentPath[0][0];
+        const dy = mousePos[1] - currentPath[0][1];
+        panOffset.current[0] += dx;
+        panOffset.current[1] += dy;
+
+        currentPath = [mousePos];
+        redraw();
       }
     };
 
@@ -183,6 +225,10 @@ function Canvas() {
       }
       if (isDrawing === "arrow") {
         paths.push(obj);
+        currentPath = null;
+      }
+      if (isDrawing === "pantool") {
+        // isPanning = false;
         currentPath = null;
       }
       redraw();
@@ -334,6 +380,7 @@ function Canvas() {
         <button onClick={() => setIsDrawing("rect")}>Rect</button>
         <button onClick={() => setIsDrawing("circle")}>Circle</button>
         <button onClick={() => setIsDrawing("arrow")}>Arrow</button>
+        <button onClick={() => setIsDrawing("pantool")}>Pan Tool</button>
       </div>
 
       <Undo PATHS={PATHS} redoStack={redoStack} drawRef={drawRef} />
